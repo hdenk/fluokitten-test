@@ -1,0 +1,286 @@
+;; gorilla-repl.fileformat = 1
+
+;; **
+;;; # Category Theory in Clojure using Uncomplicate Fluokitten
+;;;  Links: https://github.com/uncomplicate/fluokitten/blob/master/test/uncomplicate/fluokitten/articles/getting_started_test.clj
+;;;  https://fluokitten.uncomplicate.org/articles/functors_applicatives_monads_in_pictures.html
+;;;  http://adit.io/posts/2013-04-17-functors,_applicatives,_and_monads_in_pictures.html
+;;;  
+;;; 
+;; **
+
+;; @@
+(ns fluokitten-test.basic-tutorial
+  (:require [uncomplicate.fluokitten.core :refer [just fmap fapply <*> bind >>=]]
+            [clojure.test :refer [deftest is]]
+            [eftest.runner :as eftr]))
+
+(def run-tests (fn [tests] (eftr/run-tests tests
+                                           {:report eftest.report.pretty/report
+                                            :multithread? false})))
+;; @@
+
+;; **
+;;; 
+;; **
+
+;; **
+;;; ## Boxes
+;;; 
+;;; ### Just Something or Nothing 
+;;; 
+;;; Lists, vectors, other data structures are kinds of “boxes” that contain other values. There is an even simpler kind of a box... That is an existing box that contains some value: `Just something`, or a box that indicates that something went wrong with the process of putting a value in a box, or something was wrong with the value itself: `Nothing`. In Clojure, nil is used as a value that indicates non-existence, so in clojure we have (just 2) as a simple box that contains value 2 or nil:
+;; **
+
+;; @@
+(just 2)
+;; @@
+
+;; **
+;;; ### Functor
+;;; 
+;;; The simplest of these general concepts is functor. Here is a problem that it solves:
+;; **
+
+;; @@
+(deftest cast-problem
+  (is (thrown? ClassCastException
+               ((partial + 3) (just 2))) ; <==
+      "ClassCastException should be thrown"))
+
+(run-tests [#'cast-problem])
+;; @@
+
+;; **
+;;; A plain function that accepts number cannot accept a box with a number. Straightforward solution would be to create a special function that extracts the value and then applies the original function, but this solution is not general enough - we would have to check the type of box, find a relevant extractor function, etc.
+;;; 
+;;; This is where functors come in: if some box can accept functions to be applied to the context of a box (and most, if not all boxes can do this) we can say that the box is a functor and use fmap function just for that purpose:
+;; **
+
+;; @@
+(deftest cast-problem-solved
+  (is (= (fmap (partial + 3) (just 2)) ; <==
+         (just 5))))                   ; <==
+
+(run-tests [#'cast-problem-solved])
+;; @@
+
+;; **
+;;; fmap is very convenient: it not only applies a normal function to the box, it return its result conveniently boxed!
+;;; Just what is a Functor really?
+;;; 
+;;; Haskell has its own machinery for implementing this, as sketched in the [original article](http://adit.io/posts/2013-04-17-functors,_applicatives,_and_monads_in_pictures.html). Clojure uses its own, different mechanism - protocols. In Clojure, Functor is a protocol that defines the fmap method. If you want a box you are creating to be a functor, you’ll implement the Functor protocol, and make sure (by examining the code, testing, etc) that it satisfies functor laws, which ensure that your fmap implementation is a well behaved fmap. Clojure fmap also supports varargs (multiple arguments) so it can apply a multiargument function to many boxes, while in Haskell can accept only one box. When we fmap a function (even the one that would normaly break its teeth on a broken value and raise an exception) to a broken Maybe box, we get a broken box:
+;; **
+
+;; @@
+(deftest broken-box
+  (is (= (fmap (partial + 3) nil) ; <==
+         nil)))                   ; <== 
+
+(run-tests [#'broken-box])
+;; @@
+
+;; **
+;;; The next example is specific to Maybe, but shows how functors can save us working on particulars and concentrate on the generalities:
+;; **
+
+;; @@
+(def posts {1 {:title "Apples"}})
+
+(defn find-post [post-id]
+  (if-let [post (posts post-id)]
+    (just post)
+    nil))
+
+(defn get-post-title [post]
+  "This example is intentionally silly to correspond to the
+   intention of the original example. Clojure maps handle
+   the nil-map case well, but the real database title fetching
+   function might not."
+  (post :title))
+
+(deftest post-sample
+  (is (= (fmap get-post-title (find-post 1)) ; <== 
+         (just "Apples")))                   ; <==
+  (is (= (fmap get-post-title (find-post 2)) ; <==
+         nil)))                              ; <==
+
+(run-tests [#'post-sample])
+;; @@
+
+;; **
+;;; And, let’s see a slightly more complex box - Clojure vector:
+;; **
+
+;; @@
+(deftest vector-box
+  (is (= (fmap (partial + 3) [2 4 6]) ; <==
+         [5 7 9])))                   ; <==
+
+(run-tests [#'vector-box])
+;; @@
+
+;; **
+;;; Functions are functors, too:
+;; **
+
+;; @@
+(deftest fn-box
+  (let [foo (fmap (partial + 3) (partial + 2))]
+    (is (= (foo 10) ; <==
+           15))))   ; <==
+
+(run-tests [#'fn-box])
+;; @@
+
+;; **
+;;; ## Applicatives
+;;; 
+;;; A slightly more powerful kind of box is a box that can accept function(s) to be applied not only bare, but also boxed. Every box that can be applicative can also be a functor.
+;; **
+
+;; @@
+(def add3 (partial + 3))
+
+(deftest test-fapply
+  (is (= (fapply (just add3) (just 2)) ; <==
+         (just 5))))                   ; <==
+
+(deftest haskel-ap
+  (is (= (<*> (just add3) (just 2)) ; <==
+         (just 5))))                ; <==
+
+(run-tests [#'test-fapply #'haskel-ap])
+;; @@
+
+;; **
+;;; Why `fmap` instead of `<*>` and what is the difference?
+;;; 
+;;; First, the difference between Clojure’s fapply and Haskell’s `<*>`. Haskell `<*>` is an infix operator, so it is more convenient to use the symbol, than its (mostly used but not that widely known) name `ap`. In Clojure, we do not use operators, and function application is written in a prefix style, so using an a-z name is more readable. ap is too short and indistinctive and apply is already taken by Clojure core. Additionally, fapply is consistently named with fmap.
+;;; 
+;;; Second, the difference between fapply and `<*>` functions in Clojure. In this example, they are equivalent, but when more parameters are provided, `(<*> x y z)` in Clojure is equivalent to `(fapply (fapply x y) z)` in Clojure and `x <*> y <*> z` in Haskell.
+;;; 
+;;; Vectors are also applicative, with an interesting twist that a vector can carry many functions to be applied:
+;; **
+
+;; @@
+(deftest haskel-ap-2-fns
+  (is (= (<*> [(partial * 2) (partial + 3)] [1 2 3]) ; <==
+         [2 4 6 4 5 6])))                            ; <==
+
+(run-tests [#'haskel-ap-2-fns])
+;; @@
+
+;; **
+;;; The following example in the original article is relevant only for Haskell’s `fmap`. The goal was to apply a function that takes two arguments to two boxed values. Haskell’s `fmap` only accepts one boxed value at a time. Therefore, applicative is needed for the application for the second box, because the result of the first application is a curried `(+3)` function in a box. Clojure’s `fmap` does not have such problems, since it can accept as many arguments as the function that is to be applied needs.
+;; **
+
+;; @@
+(deftest fmap-2-boxes
+  (is (= (fmap * (just 5) (just 3)) ; <==
+         (just 15))))               ; <==
+
+(run-tests [#'fmap-2-boxes])
+;; @@
+
+;; **
+;;; ## Monads
+;;; 
+;;; Maybe monads seemed bizarre if you tried to understand them right away, but after you familliarize yourself with functors and applicatives, they should be much simpler to grasp. Let’s translate the original article’s examples to Clojure code.
+;;; 
+;;; Here’s the half function in Clojure:
+;; **
+
+;; @@
+(defn half [x]
+  (if (even? x)
+    (just (quot x 2))
+    nil))
+;; @@
+
+;; **
+;;; It takes a number and maybe produces a boxed number. If the number cannot be halved to two equal integers, it returns `nil` (remember, `nil` is Clojure’s `Nothing`)
+;; **
+
+;; @@
+(deftest half-even
+  (is (= (half 4)    ; <==
+         (just 2)))) ; <==
+
+(deftest half-odd
+  (is (= (half 5) ; <==
+         nil)))   ; <==
+
+(run-tests [#'half-even #'half-odd])
+;; @@
+
+;; **
+;;; 
+;; **
+
+;; **
+;;; Try to feed it a boxed value, and it complains with a nasty exception:
+;; **
+
+;; **
+;;; 
+;; **
+
+;; @@
+;(half (just 4))
+
+;=> Exception thrown: java.lang.IllegalArgumentException (Argument must be an integer: #just[4])
+;; @@
+
+;; **
+;;; Fortunately, since our box (`Just`) is also a monad, it can handle even such cases with the help of the bind function:
+;; **
+
+;; @@
+(deftest test-bind
+  (is (= (bind (just 3) half)
+         nil))
+  (is (= (bind (just 4) half)
+         (just 2))))
+
+(run-tests [#'test-bind])
+;; @@
+
+;; **
+;;; Similarly to the case with `fapply` and `<*>`, bind has its own twin, `>>=`. When only one box is supplied (like in this example) they do the same thing. Here’s the rest of the code for the original example, which, by now, you should be able to follow easily:
+;; **
+
+;; @@
+(deftest haskel-bind
+  (is (= (>>= (just 3) half)
+         nil))
+  (is (= (>>= (just 4) half)
+         (just 2)))
+  (is (= (>>= nil half)
+         nil))
+  (is (= (>>= (just 20) half half half)
+         nil))
+  (is (= (>>= (just 20) half half)
+         (just 5))))
+
+(run-tests [#'haskel-bind])
+;; @@
+
+;; **
+;;; The last example in the original article (reading a file and printing) is not really relevant for Clojure, which is not a strictly pure language. In Clojure, we would simply use impure functions for working with input/output, and we are not forced to use IO Monad for that. Therefore, we skip this part.
+;;; 
+;;; ##Conclusion
+;;; 
+;;; * A functor in Clojure is a type that implements the Functor protocol.
+;;; * An applicative is a type that implements the Applicative protocol.
+;;; * A monad is a type that implements the Monad protocol.
+;;; * Maybe monad is implemented with the Just and nil types, which implement all three protocols, 
+;;; 
+;;; so they are functors, applicatives, and monads.
+;;; 
+;;; 
+;; **
+
+;; **
+;;; 
+;; **

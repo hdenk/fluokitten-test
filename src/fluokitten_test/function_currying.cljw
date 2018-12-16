@@ -1,0 +1,249 @@
+;; gorilla-repl.fileformat = 1
+
+;; **
+;;; # Fast Function Currying in Clojure (Without Macros)
+;;;  Links: https://dragan.rocks/articles/18/Fluokitten-080-Fast-function-currying-in-Clojure 
+;;; 
+;; **
+
+;; @@
+(ns fluokitten-test.function-currying
+  (:require [uncomplicate.fluokitten.core :refer [just fmap curry]]
+            [clojure.test :refer [deftest is]]
+            [eftest.runner :as eftr]))
+
+(def run-tests (fn [tests] (eftr/run-tests tests
+                                           {:report eftest.report.pretty/report
+                                            :multithread? false})))
+;; @@
+
+;; **
+;;; 
+;; **
+
+;; **
+;;; ## What Clojure's partial lack
+;;; 
+;;; The closest thing to currying in Clojure is the partial function. It is so similar on the surface that, when the topic comes up in online discussions, the answer is usually that Clojure supports currying, and you can do this using partial.
+;;; 
+;;; The idea of both currying and partial is that when you apply a function with fewer arguments than it requires, instead of throwing an error, the function closes over what's there and creates a new function that awaits for the remaining arguments. The main difference is that partial is a higher order function that has to be called explicitly, while currying is automatic.
+;;; 
+;;; This function takes exactly 4 arguments.
+;; **
+
+;; @@
+(defn add4 [x y z w]
+  (+ x y z w))
+;; @@
+
+;; **
+;;; If we call it with exactly four, it adds them.
+;; **
+
+;; @@
+(add4 1 2 3 4)
+;; @@
+
+;; **
+;;; However, if we call it with only two, it throws an ArrityException.
+;; **
+
+;; @@
+(deftest curry-problem
+  (is (thrown? clojure.lang.ArityException 
+               (add4 1 2)) ; <==
+      "ArityException should be thrown"))
+
+(run-tests [#'curry-problem])
+;; @@
+
+;; **
+;;; Often, only some arguments are known at some point in time. Later they are repeated. Instead of keeping track of them all the time, we would like to somehow fill them in, and be able to supply the rest at an appropriate time in future. partial is just what we need. An example would be supplying a database connection to a function that generates queries.
+;; **
+
+;; @@
+(def add2 (partial add4 1 2))
+;; @@
+
+;; **
+;;; The resulting function add2 does the same thing as add4, but it "remembers" arguments 1 and 2, and can return the answer once the remaining arguments are known.
+;; **
+
+;; @@
+(add2 3 4)
+;; @@
+
+;; **
+;;; 
+;; **
+
+;; **
+;;; This works well and is used often in Clojure. There is one issue that may not be important until you are working on code that needs to be general: you have to know the details of the function at hand, how many arguments it requires, and to decide explicitly, on a case by case basis whether you'll apply it, or you need to call partial. When you are writing a specific application, this might not be an issue, but when you are writing general code (say, a library) this makes things complicated.
+;;; 
+;;; ## How currying is different and why it is tricky in Clojure
+;;; 
+;;; With currying, this process is automatic. If a function received enough arguments, it can be applied. If it received less than necessary, it will return a function that expects the remaining arguments. This is easier than having to do it manually on a case by case basis.
+;;; 
+;;; Why Clojure's functions don't do it then? Because it clashes with Clojure's support for multi-arity functions. Take function + as an example. The basic use case is that it expects two arguments to add, but it can receive 0, 1, 2, 3, or any other number of arguments, and it will add them together. With currying, how is it supposed to know whether (+ 3) should return 3, or wait for more arguments? And if it has to wait, should it wait for one more, or more, an how many, before it adds them and returns a number?
+;;; 
+;;; In languages such as Haskell, which support automatic currying, it is straightforward. Each function expect an exact number of arguments. If it receives less, currying applies. (Technically, each function there expects one argument, but let's not lose ourselves in the details that are not important here). So, function + expects exactly two arguments. If called with 0 or 1, it will produce a function that waits for the rest.
+;;; 
+;;; So, currying as the default is not possible in Clojure. That was bad news.
+;;; 
+;;; ## Fluokitten brings automatic currying to Clojure
+;;; 
+;;; The good news, though, is that automatic currying is possible in Clojure, together with multiple arities, when needed! Fluokitten supported that from the beginning, many years ago, since I needed real currying to implement monadic concepts that Fluokitten implements for Clojure.
+;;; 
+;;; Here's how it works. The only thing we need is the curry function. It turns any ordinary Clojure function into a function that is capable of automatic currying! The result is also a fully capable Clojure function. No macros or special environment is required. It can turn any existing ordinary function into a currying one; there's no need for special concepts such as defcurry. There's not even the pressure to decide about currying support at the time of function definition. It's also rather fast, but let's first see how it's used.
+;;; 
+;;; Please take into account that I'll use arithmetic functions as a simple example. In real life, you'll see more benefits from currying when you work with higher order functions that need extra flexibility. Don't attach too much to the arithmetic functionality when thinking about when currying could be useful to you.
+;;; 
+;;; I'll now curry the existing add4 function.
+;;; 
+;;; 
+;; **
+
+;; @@
+(def curried-add4 (curry add4))
+;; @@
+
+;; **
+;;; Now, when I call curried-add4 with fewer arguments than it can work with:
+;; **
+
+;; @@
+(curried-add4 1 2)
+;; @@
+
+;; **
+;;; 
+;; **
+
+;; **
+;;; 
+;; **
+
+;; **
+;;; It created a curried function automatically! If we call it with enough arguments (it's now cached in the REPL as *1) it will compute the final result.
+;; **
+
+;; @@
+(*1 3 4)
+;; @@
+
+;; **
+;;; But if we don't have both missing arguments, but only one, it will continue with currying.
+;; **
+
+;; @@
+(*2 3)
+;; @@
+
+;; **
+;;; One more argument to go.
+;; **
+
+;; @@
+(*1 4)
+;; @@
+
+;; **
+;;; Fine. add4 was straightforward, though. It asks for exactly 4 arguments, so currying was unambigous. What happens with variadic functions? + can work with any number of arguments. In this case, curry defaults to 2, since there is not much point in currying a function with 0 or 1 arguments anyway.
+;; **
+
+;; @@
+(curry +)
+;; @@
+
+;; **
+;;; You see in the report that the arity of this curried function is 2 and that the original function is +.
+;;; 
+;;; But still, what if I didn't want it to be 2? What if I wanted to select a specific arity among many that + supports? curry accepts an explicit arity, of course!
+;; **
+
+;; **
+;;; 
+;; **
+
+;; @@
+(def curried-+3 (curry + 3))
+
+(curried-+3 1)
+
+(*1 1 2 3 4 5 6)
+;; @@
+
+;; **
+;;; See? Fluokitten's curry adapts to everything!
+;;; 
+;;; ## What about performance? Overhead?
+;;; 
+;;; In short, curried functions do not introduce any call overhead (other than an additional simple function call in the order of a nanosecond or two)!
+;;; 
+;;; The curry itself takes a dozen nanoseconds if you supply the arity explicitly, or a couple hundreds of nanoseconds if it has to infer it by inspecting the function you supply).
+;;; 
+;;; Let's check it with a few Criterium benchmarks.
+;; **
+
+;; @@
+(use 'criterium.core)
+
+(print (str "1."))
+(quick-bench (curry + 3))
+
+(print (str "\n2."))
+(quick-bench (curry +))
+
+(print (str "\n3."))
+(quick-bench (curry hash-map))
+
+(print (str "\n4."))
+(quick-bench (curry add4))
+;; @@
+
+;; **
+;;; OK, the initial currying is fast. How about application?
+;;; 
+;;; Let's compare it with some fast functions to see whether currying slows them down:
+;; **
+
+;; @@
+(print (str "1."))
+(quick-bench (add4 1 2 3 4))
+
+(print (str "\n2."))
+(quick-bench (curried-add4 1 2 3 4))
+;; @@
+
+;; **
+;;; Admittedly, in this case there is an overhead of 7 nanoseconds. That's very little. But, we can make it even less. add4 works with numbers, but the arguments are objects. That means we weren't particularly concerned with shaving every nanosecond off the execution speed. Let's see what happens when we typehint it.
+;; **
+
+;; @@
+(defn primitive-add4 ^double [^double x ^double y ^double z ^double w]
+  (+ x y z w))
+
+(quick-bench (primitive-add4 1 2 3 4))
+;; @@
+
+;; **
+;;; That was the whopping overhead of nanoseconds!
+;;; 
+;;; The last thing to check out: what is the overhead in the case when there are not enough arguments, so the function has to curry?
+;; **
+
+;; @@
+(def curried-primitive-add4 (curry primitive-add4))
+
+(quick-bench (curried-primitive-add4 1 2 3))
+;; @@
+
+;; **
+;;; Yes, even when it has to return the new curried function, it is still only a dozen nanoseconds!
+;;; 
+;;; ## Conclusions
+;;; 
+;;; Currying is great, especially when combined with other functional programming concepts that Fluokitten enriches Clojure with. However, don't rush now and embellish all your functions with curry! When it's needed, it will serve you well, but don't abuse it for no reason.
+;;; 
+;;; Fluokitten helps me a lot. I use it in Neanderthal and other high-performance code to get the elegance of Clojure's higher order map and reduce, while keeping the speed of native and GPU backends. Check it out…
+;; **
